@@ -152,5 +152,6 @@ Then in rgoclient:
 
 main's history is rewritten by the rebase, which is why the push is forced. The
 previous tag still points at the previous release, so nothing already built
-moves under anyone.
+moves under anyone -- and do not re-point one that has been fetched, or the
+checksum database will fail every later build with a mismatch.
 EOF

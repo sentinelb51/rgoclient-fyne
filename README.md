@@ -50,3 +50,22 @@ runs, so a passing build is not evidence a patch survived.
 
 On a conflict it stops mid-rebase and says what to do. What it cannot decide is
 what a patch should mean once upstream has rewritten the code underneath it.
+
+## Two things that will bite
+
+**Never move a published `-rgo.N` tag.** The Go checksum database records what a
+tag contained the first time anyone fetched it, so re-pointing one turns every
+later fetch into a `SECURITY ERROR` about a checksum mismatch — including for
+builds that were working. Cut the next N instead; `update-fyne.sh` already picks
+an unused one.
+
+**Clone with long paths enabled on Windows.** Some of Fyne's `testdata`
+filenames run past 110 characters, which is enough to break `MAX_PATH` in a
+deep directory:
+
+```
+git clone -c core.longpaths=true https://github.com/sentinelb51/rgoclient-fyne.git
+```
+
+This only affects working on the fork. Consuming it does not: `go` fetches the
+module as a zip from the proxy and never clones it.
