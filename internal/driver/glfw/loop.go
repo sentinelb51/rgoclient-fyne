@@ -240,6 +240,7 @@ func (d *gLDriver) repaintWindow(w *window) bool {
 	visible := w.visible
 
 	if view != nil && visible {
+		w.applySwapInterval() // RGOClient patch: the GL context is current here and nowhere else
 		w.frame.requestFrame()
 		view.SwapBuffers()
 	}

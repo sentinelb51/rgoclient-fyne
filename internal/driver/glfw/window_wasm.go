@@ -718,3 +718,7 @@ func (w *wrapInner) updateVisibility() {
 func (w *window) scaleInput(in float64) float64 {
 	return in
 }
+
+// applySwapInterval is what the desktop driver uses to turn vsync on and off.
+// The browser owns presentation, so there is nothing to apply. RGOClient patch.
+func (w *window) applySwapInterval() {}

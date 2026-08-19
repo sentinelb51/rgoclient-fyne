@@ -118,6 +118,10 @@ type window struct {
 	pending []func()
 
 	lastWalkedTime time.Time
+
+	// swapInterval is what SwapInterval was last called with on this window's
+	// context, -1 before the first call. RGOClient patch.
+	swapInterval int
 }
 
 func (w *window) SetFullScreen(full bool) {
@@ -839,6 +843,9 @@ func (w *window) create() {
 
 		if build.IsWayland {
 			glfw.SwapInterval(0)
+			w.swapInterval = 0
+		} else {
+			w.swapInterval = -1
 		}
 	})
 
@@ -889,4 +896,26 @@ func (w *window) view() *glfw.Window {
 // wrapInnerWindow is a no-op to match what the web driver provides
 func wrapInnerWindow(*container.InnerWindow, fyne.Window, *gLDriver) fyne.Window {
 	return nil
+}
+
+// applySwapInterval hands the window's requested vsync state to GL, if it has
+// changed. RGOClient patch: SwapInterval applies to the context that is current,
+// and repaintWindow is the only place in the driver where ours is. Wayland is
+// left alone — upstream turns vsync off there on purpose, and the compositor
+// paces frames itself.
+func (w *window) applySwapInterval() {
+	if build.IsWayland {
+		return
+	}
+
+	wanted := 1
+	if !fyne.VSync() {
+		wanted = 0
+	}
+	if wanted == w.swapInterval {
+		return
+	}
+
+	glfw.SwapInterval(wanted)
+	w.swapInterval = wanted
 }
