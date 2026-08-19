@@ -1,0 +1,4 @@
+# Upstream Fyne is LF throughout and this tree is diffed against pristine
+# upstream on every version bump. Any EOL conversion would make every line of
+# every file look changed, so nothing here is converted, ever.
+* -text
