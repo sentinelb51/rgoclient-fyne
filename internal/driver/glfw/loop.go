@@ -129,7 +129,10 @@ func (d *gLDriver) runGL() {
 		f()
 	}
 
-	eventTick := time.NewTicker(time.Second / 60)
+	// RGOClient patch: the tick rate is fyne.SetFrameRate's rather than a literal
+	// 60, and re-read each tick so a change applies without a restart.
+	rate := fyne.FrameRate()
+	eventTick := time.NewTicker(frameInterval(rate))
 	for {
 		select {
 		case <-d.done:
@@ -156,6 +159,11 @@ func (d *gLDriver) runGL() {
 				f.done <- struct{}{}
 			}
 		case <-eventTick.C:
+			if wanted := fyne.FrameRate(); wanted != rate {
+				rate = wanted
+				eventTick.Reset(frameInterval(rate))
+			}
+
 			d.pollEvents()
 			for i := 0; i < len(d.windows); i++ {
 				w := d.windows[i].(*window)
@@ -193,6 +201,12 @@ func (d *gLDriver) runGL() {
 			d.drawSingleFrame()
 		}
 	}
+}
+
+// frameInterval is one tick of the driver loop at the requested rate. The rate
+// is clamped by fyne.SetFrameRate, so it is never zero here.
+func frameInterval(fps int) time.Duration {
+	return time.Second / time.Duration(fps)
 }
 
 func (d *gLDriver) destroyWindow(w *window, index int) {
