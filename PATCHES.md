@@ -1,6 +1,6 @@
 # The patches
 
-Three, all under Fyne's `internal/` — which is the whole reason this fork
+Four, all under Fyne's `internal/` — which is the whole reason this fork
 exists, since none of it is reachable from an importing module. Nothing else in
 the tree is edited: `git diff upstream main` is exactly this list.
 
@@ -51,6 +51,44 @@ client mints one per entry, `ui.WithCaret` being the only way to colour a caret
 without colouring the focus ring with it, so an open and close of a settings
 number box cost about 6 MB that nothing ever released. A fresh scope now costs a
 map entry.
+
+## 4. A present gate for Windows
+
+`internal/driver/glfw/present_windows.go` (new) — `vblankGate`, filling the
+`presentGate` seam that upstream leaves as `noGate{}` (always ready) everywhere
+but Wayland.
+
+`internal/driver/glfw/present_notwayland.go` — build tags narrowed so Windows
+takes the new file rather than the stub.
+
+With vsync off the driver presented on every tick it had something to draw. DWM
+composes a window once per vertical blank and keeps only the newest buffer it was
+handed, so everything past that rate was drawn, uploaded and discarded. Measured
+on a 540Hz panel at `FrameRate` 1000: 1000 presents/sec before, 540 after.
+
+`DwmGetCompositionTimingInfo` is the documented way to ask when the compositor
+wants a frame and it is not usable — on Windows 11 it fails with `0x88980090` for
+every caller, windowed or not, with composition enabled. The kernel-mode path
+beneath it still works, so the gate waits on the adapter's vertical blank
+(`D3DKMTOpenAdapterFromHdc` + `D3DKMTWaitForVerticalBlankEvent`, both gdi32) on a
+goroutine of its own, since the wait blocks and the loop goroutine is the whole
+client.
+
+The shape is the Wayland gate's: presenting arms a wait, the wait arriving makes
+the window presentable again. Nothing waits while nothing draws, so an idle
+window still costs zero wakeups.
+
+Three things it will not do:
+
+- **Pace to anything but the primary display.** The adapter is opened from
+  `GetDC(NULL)`, because `newPresentGate` runs at window *creation*, before there
+  is an HWND to ask which monitor the window is on. A window dragged onto a second
+  monitor with its own refresh rate is paced by the first one's.
+- **Gate while vsync is on.** The driver already blocks in `SwapBuffers` until the
+  display is ready; a second pacer on top could only fight it.
+- **Hold a window shut.** The wait cannot be cancelled, so `gateTimeout` (50ms)
+  reports ready anyway, and a wait that fails marks the gate dead — it degrades to
+  `noGate` rather than retrying a handle the display driver has invalidated.
 
 ## Carrying them forward
 
