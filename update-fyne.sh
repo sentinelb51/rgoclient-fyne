@@ -93,7 +93,8 @@ cat > .gitattributes <<'EOF'
 EOF
 
 git add -A
-git commit -q -m "Fyne v$target (pristine upstream)
+# --allow-empty so re-running the same version is a no-op rather than a failure
+git commit -q --allow-empty -m "Fyne v$target (pristine upstream)
 
 Unmodified fyne.io/fyne/v2 v$target as published. This branch carries upstream
 and nothing else; the RGOClient patches live on main."
