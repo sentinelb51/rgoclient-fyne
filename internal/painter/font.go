@@ -187,6 +187,7 @@ func CachedFontFace(style fyne.TextStyle, source fyne.Resource, o fyne.CanvasObj
 func ClearFontCache() {
 	fontCache.Clear()
 	fontCustomCache.Clear()
+	measureFontCache.Clear()
 }
 
 // DrawString draws a string into an image.
@@ -215,12 +216,18 @@ func DrawStringOffset(dst draw.Image, s string, color color.Color, f shaping.Fon
 }
 
 func loadMeasureFont(data fyne.Resource) *font.Face {
+	key := measureFontKey{name: data.Name(), size: len(data.Content())}
+	if face, ok := measureFontCache.Load(key); ok {
+		return face
+	}
+
 	loaded, err := font.ParseTTF(bytes.NewReader(data.Content()))
 	if err != nil {
 		fyne.LogError("font load error", err)
 		return nil
 	}
 
+	measureFontCache.Store(key, loaded)
 	return loaded
 }
 
@@ -362,9 +369,24 @@ type cacheID struct {
 	scope string
 }
 
+// measureFontKey identifies a font resource by what is cheap to compare about
+// it. Not the fyne.Resource itself: it is an interface, and a map key whose
+// dynamic type is not comparable panics.
+type measureFontKey struct {
+	name string
+	size int
+}
+
 var (
 	fontCache       async.Map[cacheID, *FontCacheItem]
 	fontCustomCache async.Map[fyne.Resource, *FontCacheItem] // for custom resources
+
+	// measureFontCache holds each resource's parsed face. RGOClient patch:
+	// CachedFontFace keys on {style, scope} and cache.OverrideTheme mints a scope
+	// from a counter that never repeats, so without this every Refresh reaching a
+	// scoped theme re-parsed every font it names — megabytes per open and close of
+	// an entry with a caret. A fresh scope now costs a map entry.
+	measureFontCache async.Map[measureFontKey, *font.Face]
 )
 
 type noopLogger struct{}
