@@ -316,6 +316,16 @@ func (c *Canvas) SetDirty() {
 	c.dirty = true
 }
 
+// IsDirty reports whether the canvas is waiting to be painted, without clearing
+// the flag.
+//
+// RGOClient patch: the driver loop asks before it sleeps, so a canvas marked
+// dirty and not yet painted — the present gate not having been ready — keeps the
+// loop on the frame clock instead of waiting for something else to wake it.
+func (c *Canvas) IsDirty() bool {
+	return c.dirty
+}
+
 // SetMenuTreeAndFocusMgr sets menu tree and focus manager.
 //
 // This function does not use the canvas lock.

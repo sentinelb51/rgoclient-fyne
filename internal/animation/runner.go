@@ -84,6 +84,18 @@ func (r *Runner) Stop(a *fyne.Animation) {
 	r.pendingAnimations = newList
 }
 
+// HasAnimations reports whether anything is left to tick.
+//
+// RGOClient patch: the driver loop asks before it sleeps. An animation started
+// from another goroutine is not seen until the idle wait expires, which is the
+// same bound as anything else reaching the loop without a wake.
+func (r *Runner) HasAnimations() bool {
+	r.animationMutex.RLock()
+	defer r.animationMutex.RUnlock()
+
+	return r.runnerStarted || len(r.pendingAnimations) > 0
+}
+
 // TickAnimations progresses all running animations by one tick.
 // This will be called from the driver to update objects immediately before next paint.
 func (r *Runner) TickAnimations() {

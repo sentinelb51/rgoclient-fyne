@@ -1,6 +1,6 @@
 # The patches
 
-Four, all under Fyne's `internal/` — which is the whole reason this fork
+Five, all under Fyne's `internal/` — which is the whole reason this fork
 exists, since none of it is reachable from an importing module. Nothing else in
 the tree is edited: `git diff upstream main` is exactly this list.
 
@@ -13,10 +13,10 @@ Every patch is marked `RGOClient patch` in the source, so
 `pacing.go` (new, package `fyne`) — `SetFrameRate` / `FrameRate`, an atomic the
 driver reads.
 
-`internal/driver/glfw/loop.go` — `runGL`'s ticker was the literal
-`time.NewTicker(time.Second / 60)`. It now starts at `fyne.FrameRate()` and
-re-reads it each tick, resetting when it has changed, so the setting applies
-without a restart.
+`internal/driver/glfw/loop.go` — the driver's frame interval was the literal
+`time.NewTicker(time.Second / 60)`. It comes from `fyne.FrameRate()` and is
+re-read each frame, so the setting applies without a restart. Patch 5 replaced
+the ticker itself; the rate is now what the loop's wait is bounded by.
 
 ## 2. Vsync off
 
@@ -89,6 +89,53 @@ Three things it will not do:
 - **Hold a window shut.** The wait cannot be cancelled, so `gateTimeout` (50ms)
   reports ready anyway, and a wait that fails marks the gate dead — it degrades to
   `noGate` rather than retrying a handle the display driver has invalidated.
+
+## 5. The loop waits instead of polling
+
+`internal/driver/glfw/loop.go` — `runGL` was a `select` over `d.done`, the main
+thread's func queue and a ticker whose case called `glfw.PollEvents()`. It is now
+a plain loop: drain the func queue, draw if the frame deadline has passed, then
+block in `glfw.WaitEventsTimeout` until the next one.
+
+`internal/driver/glfw/loop_desktop.go`, `loop_wasm.go` — `waitEvents`,
+`postEmptyEvent` and `idleWait`, the three parts of that which are not the same
+call on both platforms. glfw-js has no timed wait and the browser owns the frame
+clock, so wasm keeps a sleep and an `idleWait` of zero.
+
+What it buys:
+
+- **Input is seen when it lands.** Polling left an event in the OS queue until the
+  next tick collected it, so the frame rate set how often the client *looked* as
+  much as how often it drew. The wait returns on the event itself and GLFW runs
+  the callbacks from inside it, so only the drawing they ask for is paced.
+- **An idle window costs ten wakeups a second rather than the frame rate's.** At
+  `FrameRate` 1000 the loop woke a thousand times a second to find nothing dirty
+  and draw nothing.
+
+What it needs:
+
+- `runOnMainWithWait` posts an empty event after queueing, and `Quit` posts one
+  after closing `done`. Neither is an OS event, and the loop is inside the wait.
+  `PostEmptyEvent` is one of the few GLFW calls documented as safe from any
+  goroutine.
+- `pendingFuncs`, a count of what has been queued and not yet run. `funcQueue` is
+  an unbounded channel and forwards from `In` to `Out` on a goroutine of its own,
+  so the wake can reach the loop before the func does; a positive count is what
+  tells the drain to wait on the channel rather than go back to sleep through it.
+- `framePending`, and the two read-only accessors it is built from —
+  `common.Canvas.IsDirty` and `animation.Runner.HasAnimations`. The loop may only
+  sleep past its frame deadline if nothing is waiting to be drawn. Both flags are
+  set on the loop's own goroutine, so a `false` cannot go stale inside a wait.
+- `idleWait` (100ms), the ceiling on that sleep, for what can reach the loop
+  without waking it: an animation started off the main goroutine, a cache sweep
+  come due. Nothing is painted when it expires unless something asks.
+
+The deadline moves on every frame *attempt* rather than on every paint, so a
+canvas still dirty because the present gate was not ready is retried a frame
+later rather than spun on. Below `waitResolution` — a millisecond, which is both
+the OS wait's granularity and one frame at the highest rate `SetFrameRate`
+allows — a deadline counts as due, since waiting for it would round down to no
+wait at all.
 
 ## Carrying them forward
 

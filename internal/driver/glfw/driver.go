@@ -143,6 +143,7 @@ func (d *gLDriver) Quit() {
 	// Only call close once to avoid panic.
 	if running.CompareAndSwap(true, false) {
 		close(d.done)
+		postEmptyEvent() // RGOClient patch: the loop is waiting on the OS event queue
 	}
 }
 

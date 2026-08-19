@@ -4,7 +4,7 @@ import "sync/atomic"
 
 // Frame pacing. An RGOClient patch, not upstream API.
 //
-// Upstream hard-codes the desktop driver's event ticker at 60 Hz
+// Upstream polls the OS event queue on a ticker hard-coded at 60 Hz
 // (internal/driver/glfw/loop.go) and calls glfw.SwapInterval only under Wayland
 // (internal/driver/glfw/window_desktop.go). Both files are under internal/, so
 // neither is reachable from an importing module; these two knobs are the seam
@@ -31,10 +31,11 @@ func init() {
 	vsync.Store(true)
 }
 
-// SetFrameRate sets how many times a second the desktop driver polls events,
-// ticks animations and considers a repaint. It is a ceiling rather than a rate —
-// a window with nothing to redraw costs a wakeup per tick and draws nothing.
-// Safe from any goroutine; applied on the next tick.
+// SetFrameRate sets how many times a second the desktop driver ticks animations
+// and considers a repaint. It is a ceiling and not a rate: the loop waits on the
+// OS event queue, so a window with nothing to draw costs nothing to leave open,
+// and input is processed as it arrives rather than at this rate.
+// Safe from any goroutine; applied on the next frame.
 func SetFrameRate(fps int) {
 	frameRate.Store(int64(min(max(fps, minFrameRate), maxFrameRate)))
 }
