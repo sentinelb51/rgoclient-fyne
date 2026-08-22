@@ -1,8 +1,11 @@
 # The patches
 
-Five, all under Fyne's `internal/` — which is the whole reason this fork
-exists, since none of it is reachable from an importing module. Nothing else in
-the tree is edited: `git diff upstream main` is exactly this list.
+Seven. The first five are under Fyne's `internal/`, which is the whole reason
+this fork exists, since none of it is reachable from an importing module. The
+last two are in exported code — `widget` and `canvas` — where the work being
+skipped is inside a method an importing module can call but not replace.
+Nothing else in the tree is edited: `git diff upstream main` is exactly this
+list.
 
 Every patch is marked `RGOClient patch` in the source, so
 `git grep -n "RGOClient patch"` finds all of them, and each is one commit on
@@ -136,6 +139,38 @@ later rather than spun on. Below `waitResolution` — a millisecond, which is bo
 the OS wait's granularity and one frame at the highest rate `SetFrameRate`
 allows — a deadline counts as due, since waiting for it would round down to no
 wait at all.
+
+## 6. RichText re-wraps only when the width moves
+
+`widget/richtext.go` — `Resize` called `Refresh()` for any change of size.
+`Refresh` clears the min-size cache, re-runs `updateRowBounds` and marks the
+canvas dirty; row bounds are wrapped against the width, so none of that is owed
+to a height.
+
+A virtualised column resizes each mounted row twice per settle — once at the
+estimated height it is placed by, once at the height it measured — so every body
+on screen was wrapped twice per settle and the window marked dirty for each.
+Guarded on the width, RGOClient's channel open went from 635µs/324KB to
+499µs/258KB and a prepended page of history from 334µs/133KB to 270µs/108KB.
+
+Truncation is excluded: it drops the rows that do not fit, which is the one
+thing in `lineBounds` that reads the height. So is the deprecated
+`Wrapping: fyne.TextWrap(fyne.TextTruncateClip)`, which turns clipping on
+underneath a `Truncation` of `Off`.
+
+## 7. An icon parses its file once
+
+`canvas/image.go` — `MinSize` refreshed when `i.Image == nil || i.aspect == 0`.
+For an SVG resource `Image` stays nil until `renderSVG` rasterises it, which
+needs a non-zero size, so an icon that is measured before it is laid out — or
+never laid out at all — answered every `MinSize` by re-reading the file. All
+`Refresh` leaves behind at that point is `i.aspect`, so the aspect alone is the
+honest guard.
+
+The driver asks every object in the tree for its minimum on every dirty frame,
+which made this an XML parse per icon per frame. On RGOClient's message column
+the frame walk went from 179µs and 61KB of garbage to 111µs and 8.4KB, and at
+the mounted cap from 252µs/66KB to 187µs/13KB.
 
 ## Carrying them forward
 

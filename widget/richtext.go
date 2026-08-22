@@ -126,7 +126,22 @@ func (t *RichText) Resize(size fyne.Size) {
 		return
 	}
 
+	// RGOClient patch: rows are wrapped against the width alone, so a resize that
+	// only changes the height needs the renderer's layout and not updateRowBounds
+	// — nor the whole-window repaint Refresh marks. A virtualised column resizes
+	// every mounted row twice per settle, at an estimated height and then the
+	// measured one, which re-wrapped every body on screen for nothing. Truncation
+	// is the exception: it drops the rows that no longer fit, so it reads the
+	// height (lineBounds' max.Height) and has to re-wrap.
+	sameWidth := size.Width == t.Size().Width &&
+		t.Truncation == fyne.TextTruncateOff && t.Wrapping != fyne.TextWrap(fyne.TextTruncateClip)
+
 	t.size = size
+
+	if sameWidth && !t.minCache.IsZero() {
+		cache.Renderer(t).Layout(size)
+		return
+	}
 
 	skipResize := !t.minCache.IsZero() && size.Width >= t.minCache.Width && size.Height >= t.minCache.Height && t.Wrapping == fyne.TextWrapOff && t.Truncation == fyne.TextTruncateOff
 
