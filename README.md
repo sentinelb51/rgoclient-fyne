@@ -1,13 +1,15 @@
 # rgoclient-fyne
 
-[Fyne](https://github.com/fyne-io/fyne) with five patches for
+[Fyne](https://github.com/fyne-io/fyne) with seven patches for
 [rgoclient](https://github.com/sentinelb51/rgoclient). Not a general-purpose
 fork and not intended for anyone else's use — if one of these ever lands
 upstream, the patch here goes away rather than staying as a second answer.
 
-Every change is under Fyne's `internal/`, which is why the fork exists at all:
-none of it can be reached from an importing module. See
-[PATCHES.md](PATCHES.md) for what each one does and why.
+Five are under Fyne's `internal/`, which is why the fork exists at all: none of
+it can be reached from an importing module. The other two skip work inside an
+exported method — `widget.RichText.Resize` and `canvas.Image.MinSize` — which an
+importing module can call but not replace. See [PATCHES.md](PATCHES.md) for what
+each one does and why.
 
 The module path is still `fyne.io/fyne/v2`, deliberately — the fork is consumed
 through a `replace`, and Go accepts a replacement whose `go.mod` declares either

@@ -110,7 +110,13 @@ func (i *Image) Hide() {
 
 // MinSize returns the specified minimum size, if set, or {1, 1} otherwise.
 func (i *Image) MinSize() fyne.Size {
-	if i.Image == nil || i.aspect == 0 {
+	// RGOClient patch: this asked for `i.Image == nil || i.aspect == 0`. An SVG
+	// resource leaves Image nil until renderSVG rasterises it — which needs a
+	// non-zero size, so an icon that has not been laid out yet never sets it — and
+	// every MinSize therefore re-ran Refresh, whose only lasting effect here is the
+	// aspect it parses the file to find. The driver asks every object on every
+	// dirty frame, so each of those was an XML parse of the icon per frame.
+	if i.aspect == 0 {
 		if i.File != "" || i.Resource != nil {
 			i.Refresh()
 		}
