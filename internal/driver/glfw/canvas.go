@@ -36,6 +36,8 @@ type glCanvas struct {
 
 	context         driver.WithContext
 	webExtraWindows *container.MultipleWindows
+
+	damage internal.DamageRegion // RGOClient patch: reused each frame, paint only
 }
 
 func (c *glCanvas) Capture() image.Image {
@@ -140,6 +142,7 @@ func (c *glCanvas) SetContent(content fyne.CanvasObject) {
 	c.setContent(content)
 
 	c.Resize(newSize)
+	c.SetDamageAll() // RGOClient patch: a swapped root moves nothing it can diff
 	c.SetDirty()
 }
 
@@ -173,6 +176,9 @@ func (c *glCanvas) reloadScale() {
 	}
 
 	c.scale = w.calculatedScale()
+	// RGOClient patch: a scale change redraws every pixel while moving no object,
+	// which the damage diff cannot see.
+	c.SetDamageAll()
 	c.SetDirty()
 
 	c.context.RescaleContext()
@@ -238,11 +244,53 @@ func (c *glCanvas) overlayChanged() {
 }
 
 func (c *glCanvas) paint(size fyne.Size) {
-	clips := &internal.ClipStack{}
 	if c.Content() == nil {
 		return
 	}
-	c.Painter().Clear()
+
+	// RGOClient patch: repaint only what changed. ComputeDamage diffs every
+	// mounted object against where it last painted; a partial frame restores the
+	// previous frame from the painter's snapshot, then clears and repaints each
+	// damaged rect under a root clip, and the snapshot absorbs those rects
+	// before the swap. The debug overlay draws for every walked object, so it
+	// forces the full path.
+	full := build.Mode == fyne.BuildDebug || !fyne.PartialRepaint()
+	if full {
+		c.ResetDamage() // tracking re-enabled must not diff against stale rects
+	} else {
+		c.ComputeDamage(size, &c.damage)
+		full = c.damage.Full()
+	}
+	if !full && !c.Painter().RestorePreviousFrame() {
+		full = true
+	}
+
+	if full {
+		c.Painter().Clear()
+		c.paintTree(size, nil)
+		c.Painter().SnapshotFrame(nil, true)
+		return
+	}
+
+	rects := c.damage.Rects()
+	for i := range rects {
+		c.paintTree(size, &rects[i])
+	}
+	c.Painter().SnapshotFrame(rects, false)
+}
+
+// paintTree walks and paints every tree. With a damage rect it paints just that
+// region: the rect is the root clip, so the painter's rect test culls the draw
+// calls and the scissor bounds the clear and every pixel — a nested scroll clip
+// intersects it on the way down (ClipStack.Push). RGOClient patch: the damage
+// parameter and its clip; nil is upstream's whole-canvas paint.
+func (c *glCanvas) paintTree(size fyne.Size, damage *internal.PaintRect) {
+	clips := &internal.ClipStack{}
+	if damage != nil {
+		inner := clips.Push(damage.Pos, damage.Size)
+		c.Painter().StartClipping(inner.Rect())
+		c.Painter().Clear()
+	}
 
 	paint := func(node *common.RenderCacheNode, pos fyne.Position) {
 		obj := node.Obj()
@@ -270,6 +318,11 @@ func (c *glCanvas) paint(size fyne.Size) {
 		}
 	}
 	c.WalkTrees(paint, afterPaint)
+
+	if damage != nil {
+		clips.Pop()
+		c.Painter().StopClipping()
+	}
 }
 
 func (c *glCanvas) setContent(content fyne.CanvasObject) {
@@ -302,6 +355,7 @@ func newCanvas() *glCanvas {
 	c := &glCanvas{scale: 1.0, texScale: 1.0, padded: true}
 	connectKeyboard(c)
 	c.Initialize(c, c.overlayChanged)
+	c.EnableDamageTracking() // RGOClient patch
 	c.setContent(&canvas.Rectangle{FillColor: theme.Color(theme.ColorNameBackground)})
 	return c
 }

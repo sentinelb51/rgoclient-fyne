@@ -1,9 +1,9 @@
 # The patches
 
-Seven. The first five are under Fyne's `internal/`, which is the whole reason
+Eight. All but two are under Fyne's `internal/`, which is the whole reason
 this fork exists, since none of it is reachable from an importing module. The
-last two are in exported code — `widget` and `canvas` — where the work being
-skipped is inside a method an importing module can call but not replace.
+sixth and seventh are in exported code — `widget` and `canvas` — where the work
+being skipped is inside a method an importing module can call but not replace.
 Nothing else in the tree is edited: `git diff upstream main` is exactly this
 list.
 
@@ -171,6 +171,63 @@ The driver asks every object in the tree for its minimum on every dirty frame,
 which made this an XML parse per icon per frame. On RGOClient's message column
 the frame walk went from 179µs and 61KB of garbage to 111µs and 8.4KB, and at
 the mounted cap from 252µs/66KB to 187µs/13KB.
+
+## 8. A dirty frame repaints only what changed
+
+Upstream's dirty state is one bool for the whole window: any `Refresh()`
+anywhere clears the framebuffer and redraws every visible object. In a chat
+client almost every frame is a caret blink, a typing dot or a presence change —
+a few hundred pixels paying for the window.
+
+The patch splits *whether* from *where*. The dirty flag still decides whether a
+frame runs; where is computed fresh each frame by diffing every mounted object
+against the rect it last painted at:
+
+- `internal/damage.go` — `PaintRect` and `DamageRegion`, the damage a frame has
+  to repaint, merged to at most four rects (each is a scissored paint pass, so
+  the cap is a cap on passes).
+- `internal/driver/common/damage.go` — the diff. `ComputeDamage` walks the
+  trees once: an object new to the walk damages its rect, one whose rect moved
+  damages both, one that was refreshed (collected from the refresh queue as
+  `FreeDirtyTextures` drains it — the same drain, one map insert) damages where
+  it stands, and one gone from the walk damages where it stood. Moves and hides
+  never say where they happened — the exported `repaint()` helpers only set the
+  bool — and the diff is what makes that not matter. `paintExtent` pads each
+  rect by what its kind draws outside its bounds: shadows, line stroke, text
+  vector pads, and 2 units for pixel rounding and edge softness.
+  `SetDamageAll` covers what moves nothing and refreshes nothing yet changes
+  every pixel: a scale reload, a content swap. Damage at 80% coverage or more
+  is promoted to a full repaint.
+- `internal/painter/gl/snapshot.go` — the previous frame, kept as a
+  framebuffer-sized texture. A partial frame draws it back first (a full-frame
+  quad, blend replace), then clears and repaints each damaged rect, then
+  `CopyTexSubImage2D`s those rects back into the texture before the swap.
+  Everything is calls the blur already makes, so no backend needs a framebuffer
+  object or an extension probe, and the backbuffer being undefined after a swap
+  never matters: every present still writes every pixel, one textured quad
+  instead of one draw call per object. `SetOutputSize` invalidates the snapshot
+  when the framebuffer changes size, which is what makes a resize a full frame.
+- `internal/driver/glfw/canvas.go` — `paint` decides. Each damaged rect is
+  painted under a root `ClipItem`, so the painter's existing rect test culls the
+  draw calls and the scissor bounds the clear; a scroll container's clip
+  intersects it on the way down (`ClipStack.Push` already intersects with its
+  parent). `BuildDebug` forces the full path — the debug overlay draws for
+  every walked object.
+- `pacing.go` — `SetPartialRepaint` / `PartialRepaint`, on by default. Off is
+  the escape hatch for a rendering artifact and the honest baseline for
+  measuring; turning it off resets the diff's memory so turning it back on
+  starts from "all new" rather than from stale rects.
+
+What a partial frame costs: one extra tree walk for the diff (~100µs at
+RGOClient's mounted cap), a full-frame textured quad, and a damage-sized GPU
+copy. What it saves: the clear, and every draw call outside the damage — a
+caret blink is a restore quad plus a handful of draws instead of the whole
+window. Scroll frames move a rect bigger than the coverage threshold and
+promote themselves to full, which is exactly the frame they were before.
+
+The mobile driver shares `common.Canvas` but never enables tracking, so it
+keeps upstream's full repaint; the diff maps are only allocated where the glfw
+canvas turns them on.
 
 ## Carrying them forward
 

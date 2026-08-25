@@ -32,6 +32,14 @@ type Painter interface {
 	StartClipping(fyne.Position, fyne.Size)
 	// StopClipping stops clipping paint actions.
 	StopClipping()
+	// RestorePreviousFrame draws the previous frame back into the framebuffer,
+	// reporting false when there is nothing valid to restore. RGOClient patch —
+	// see snapshot.go.
+	RestorePreviousFrame() bool
+	// SnapshotFrame copies the framebuffer into the snapshot the next
+	// RestorePreviousFrame draws — all of it when full, else just the regions
+	// this frame repainted. RGOClient patch — see snapshot.go.
+	SnapshotFrame(regions []internal.PaintRect, full bool)
 }
 
 // NewPainter creates a new GL based renderer for the provided canvas.
@@ -66,6 +74,10 @@ type painter struct {
 	blurKernelTexValid      bool    // whether blurKernelTex has been allocated
 	blurKernelRadius        float32 // radius the current kernel texture was built for
 	fbHeight                int     // current framebuffer height in pixels
+	fbWidth                 int     // current framebuffer width in pixels (RGOClient patch)
+	snapshotTex             Texture // previous frame, framebuffer-sized (RGOClient patch, snapshot.go)
+	snapshotValid           bool    // whether snapshotTex holds a complete frame
+	snapW, snapH            int     // size snapshotTex was allocated at; 0 = never
 	maxTextureSize          int
 	clippedTextTextures     map[*canvas.Text]clippedTextTexture
 }
@@ -120,6 +132,10 @@ func (p *painter) SetFrameBufferScale(scale float32) {
 
 func (p *painter) SetOutputSize(width, height int) {
 	p.ctx.Viewport(0, 0, width, height)
+	if width != p.fbWidth || height != p.fbHeight {
+		p.snapshotValid = false // RGOClient patch: a resized frame restores nothing
+	}
+	p.fbWidth = width
 	p.fbHeight = height
 	p.logError()
 }

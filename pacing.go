@@ -22,13 +22,15 @@ const (
 )
 
 var (
-	frameRate atomic.Int64
-	vsync     atomic.Bool
+	frameRate      atomic.Int64
+	vsync          atomic.Bool
+	partialRepaint atomic.Bool
 )
 
 func init() {
 	frameRate.Store(DefaultFrameRate)
 	vsync.Store(true)
+	partialRepaint.Store(true)
 }
 
 // SetFrameRate sets how many times a second the desktop driver ticks animations
@@ -58,4 +60,19 @@ func SetVSync(enabled bool) {
 // VSync reports what SetVSync last set.
 func VSync() bool {
 	return vsync.Load()
+}
+
+// SetPartialRepaint decides whether the desktop driver repaints only the
+// regions that changed since the previous frame, restoring the rest from a
+// snapshot of it, or clears and repaints the whole window on any change as
+// upstream does. On is the default; off is the escape hatch for a rendering
+// artifact and the honest baseline for measuring. Safe from any goroutine;
+// applied on the next frame.
+func SetPartialRepaint(enabled bool) {
+	partialRepaint.Store(enabled)
+}
+
+// PartialRepaint reports what SetPartialRepaint last set.
+func PartialRepaint() bool {
+	return partialRepaint.Load()
 }

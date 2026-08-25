@@ -49,6 +49,13 @@ type Canvas struct {
 	refreshQueue deduplicatedObjectQueue
 	dirty        bool
 
+	// RGOClient patch: the damage diff — see damage.go. All driver-goroutine only.
+	trackDamage    bool
+	damageAll      bool
+	rectGen        uint64
+	lastRects      map[fyne.CanvasObject]objectExtent
+	refreshedFrame map[fyne.CanvasObject]struct{}
+
 	mWindowHeadTree, contentTree, menuTree *renderCacheTree
 }
 
@@ -229,6 +236,11 @@ func (c *Canvas) FreeDirtyTextures() uint64 {
 
 	objectsToFree := c.refreshQueue.Len()
 	for object := c.refreshQueue.Out(); object != nil; object = c.refreshQueue.Out() {
+		if c.trackDamage {
+			// RGOClient patch: what was refreshed is what ComputeDamage has to
+			// repaint in place; this drain is the only reader of the queue.
+			c.refreshedFrame[object] = struct{}{}
+		}
 		c.freeObject(object)
 	}
 
