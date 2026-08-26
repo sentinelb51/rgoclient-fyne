@@ -1,6 +1,6 @@
 # The patches
 
-Eight. All but two are under Fyne's `internal/`, which is the whole reason
+Ten. All but two are under Fyne's `internal/`, which is the whole reason
 this fork exists, since none of it is reachable from an importing module. The
 sixth and seventh are in exported code — `widget` and `canvas` — where the work
 being skipped is inside a method an importing module can call but not replace.
@@ -228,6 +228,46 @@ promote themselves to full, which is exactly the frame they were before.
 The mobile driver shares `common.Canvas` but never enables tracking, so it
 keeps upstream's full repaint; the diff maps are only allocated where the glfw
 canvas turns them on.
+
+## 9. Frame-cost instrumentation
+
+`internal/driver/glfw/frametime.go` (new), hooks in `loop.go` and `canvas.go`,
+`internal/painter/gl/stats.go` (new, the drawn-object counter).
+
+`RGO_FRAMETIME=1` logs, every 120 painted frames: average prep (the min-size
+walk plus the refresh-queue drain), damage (the diff walk), draw (GL calls),
+swap, the worst draw, how many frames were full repaints, and objects drawn per
+frame. Off — the default — it costs one bool test per frame and an integer
+increment per drawn object. It is what patch 10 was measured with; a claim
+about frame cost starts here rather than at a guess.
+
+## 10. Repeated GL state and per-frame cache churn skipped
+
+Three separate costs, all paid per frame, none of which changes what is drawn:
+
+- **GL state memoisation** — `internal/painter/gl/state_desktop.go` (new;
+  `state_generic.go` is the mobile/web pass-through, the js handle types not
+  being comparable). Every draw set program, blend factors, buffer binding,
+  texture unit and attribute pointers whether or not they moved — each a cgo
+  call. The painter now remembers what it last applied and skips the repeat;
+  attribute pointers are re-pointed only when the program/buffer pair moves,
+  the layout being constant per program. Every state call in the package goes
+  through the wrappers — including the deletes, which forget what they delete —
+  and `Init` resets the memo with the context. Draw phase on a message-column
+  scroll: **~1.74 → ~1.43 µs of CPU per drawn object**.
+- **Per-draw coordinate allocations** — `rectCoords`, `vecRectCoordsWithPad`
+  and `lineCoords` each returned a fresh `[]float32` per object per frame. They
+  now fill scratch slices owned by the painter (their own allocations: cgo
+  rejects an interior pointer into a struct that holds Go pointers), the coords
+  being uploaded before the next draw builds its own.
+- **Per-frame cache churn** — `EnsureMinSize` called `SetCanvasForObject` for
+  every mounted object on every dirty frame, and each call allocates a cache
+  entry whether or not it stores it: ~57k allocations/s during a scroll at
+  RGOClient's mounted count. It now checks `GetCanvasForObject` first, which
+  also refreshes the entry's expiry — the blind store never did. And
+  `FreeDirtyTextures` ranged every cached texture every painted frame looking
+  for expired ones; expiry has minute granularity, so the sweep now runs at
+  most once a second per canvas.
 
 ## Carrying them forward
 

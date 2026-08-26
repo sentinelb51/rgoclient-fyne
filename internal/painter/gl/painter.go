@@ -80,6 +80,36 @@ type painter struct {
 	snapW, snapH            int     // size snapshotTex was allocated at; 0 = never
 	maxTextureSize          int
 	clippedTextTextures     map[*canvas.Text]clippedTextTexture
+
+	// RGOClient patch: context state last applied, so a repeat is not a cgo
+	// call — see state_desktop.go. The coord scratch slices are what the
+	// per-draw vertex builders fill instead of allocating; a draw uploads the
+	// coords before the next one runs, so one of each length is enough. They
+	// are separate allocations rather than arrays in this struct because cgo
+	// rejects an interior pointer into an object that holds Go pointers.
+	state     glState
+	scratch16 []float32
+	scratch20 []float32
+	scratch24 []float32
+}
+
+// coordScratch returns the reusable coordinate slice of length n, allocated on
+// first use so a zero painter still works. RGOClient patch.
+func (p *painter) coordScratch(n int) []float32 {
+	var s *[]float32
+	switch n {
+	case 16:
+		s = &p.scratch16
+	case 20:
+		s = &p.scratch20
+	default:
+		s = &p.scratch24
+	}
+	if *s == nil {
+		*s = make([]float32, n)
+	}
+
+	return *s
 }
 
 // Declare conformity to Painter interface
@@ -300,7 +330,7 @@ func (p *painter) createProgramFromSource(vertexSrc, fragmentSrc []byte) (Progra
 		return noProgram, fmt.Errorf("failed to link OpenGL program; error code: %x", glErr)
 	}
 
-	p.ctx.UseProgram(prog)
+	p.useProgram(prog)
 
 	return prog, nil
 }

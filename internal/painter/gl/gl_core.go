@@ -70,6 +70,7 @@ var textureFilterToGL = [...]int32{gl.LINEAR, gl.NEAREST, gl.LINEAR}
 
 func (p *painter) Init() {
 	p.ctx = &coreContext{}
+	p.resetState() // RGOClient patch: a (re)created context holds none of the memoised state
 	err := gl.Init()
 	if err != nil {
 		fyne.LogError("failed to initialise OpenGL", err)

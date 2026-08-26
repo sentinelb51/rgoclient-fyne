@@ -39,10 +39,8 @@ func (p *painter) RestorePreviousFrame() bool {
 		1, 1, 0, 1, 1,
 	}
 
-	p.ctx.UseProgram(p.program.ref)
-	p.updateBuffer(p.program.buff, points)
-	p.UpdateVertexArray(p.program, "vert", 3, 5, 0)
-	p.UpdateVertexArray(p.program, "vertTexCoord", 2, 5, 3)
+	p.useProgram(p.program.ref)
+	p.setVertexState(p.program, points, "vert", 3, "vertTexCoord", 2, 5)
 
 	p.SetUniform1f(p.program, "cornerRadius", 0)
 	p.SetUniform2f(p.program, "size", float32(p.fbWidth), float32(p.fbHeight))
@@ -51,11 +49,11 @@ func (p *painter) RestorePreviousFrame() bool {
 
 	// Replace outright: the snapshot is a finished frame, blending it over
 	// whatever the backbuffer holds would be wrong for translucent pixels.
-	p.ctx.BlendFunc(one, zero)
+	p.blendFunc(one, zero)
 	p.logError()
 
-	p.ctx.ActiveTexture(texture0)
-	p.ctx.BindTexture(texture2D, p.snapshotTex)
+	p.activeTexture(texture0)
+	p.bindTexture(p.snapshotTex)
 	p.logError()
 
 	p.ctx.DrawArrays(triangleStrip, 0, 4)
@@ -75,7 +73,7 @@ func (p *painter) SnapshotFrame(regions []internal.PaintRect, full bool) {
 	fresh := false
 	if p.snapW != p.fbWidth || p.snapH != p.fbHeight {
 		if p.snapW != 0 {
-			p.ctx.DeleteTexture(p.snapshotTex)
+			p.deleteTexture(p.snapshotTex)
 		}
 		p.snapshotTex = p.newTexture(canvas.ImageScalePixels)
 		p.ctx.TexImage2D(texture2D, 0, p.fbWidth, p.fbHeight, colorFormatRGBA, unsignedByte, nil)
@@ -84,8 +82,8 @@ func (p *painter) SnapshotFrame(regions []internal.PaintRect, full bool) {
 		fresh = true
 	}
 
-	p.ctx.ActiveTexture(texture0)
-	p.ctx.BindTexture(texture2D, p.snapshotTex)
+	p.activeTexture(texture0)
+	p.bindTexture(p.snapshotTex)
 
 	if full || fresh {
 		p.ctx.CopyTexSubImage2D(texture2D, 0, 0, 0, 0, 0, p.fbWidth, p.fbHeight)

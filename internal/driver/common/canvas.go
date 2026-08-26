@@ -3,6 +3,7 @@ package common
 import (
 	"image/color"
 	"reflect"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -56,6 +57,10 @@ type Canvas struct {
 	lastRects      map[fyne.CanvasObject]objectExtent
 	refreshedFrame map[fyne.CanvasObject]struct{}
 
+	// RGOClient patch: when the expired-texture sweep last ran; see
+	// FreeDirtyTextures. Driver-goroutine only.
+	lastTextureSweep time.Time
+
 	mWindowHeadTree, contentTree, menuTree *renderCacheTree
 }
 
@@ -108,11 +113,17 @@ func (c *Canvas) EnsureMinSize() bool {
 	}
 	ensureMinSize := func(node *RenderCacheNode, pos fyne.Position) {
 		obj := node.obj
-		cache.SetCanvasForObject(obj, c.impl, func() {
-			if img, ok := obj.(*canvas.Image); ok {
-				img.Refresh() // this may now have a different texScale
-			}
-		})
+		// RGOClient patch: SetCanvasForObject allocates a fresh cache entry per
+		// call, and this walk runs for every mounted object on every dirty frame.
+		// The association almost never changes, so check first — the check also
+		// refreshes the entry's expiry, which the blind store left stale.
+		if cache.GetCanvasForObject(obj) != c.impl {
+			cache.SetCanvasForObject(obj, c.impl, func() {
+				if img, ok := obj.(*canvas.Image); ok {
+					img.Refresh() // this may now have a different texScale
+				}
+			})
+		}
 
 		if parentNeedingUpdate == node {
 			c.updateLayout(obj)
@@ -244,7 +255,13 @@ func (c *Canvas) FreeDirtyTextures() uint64 {
 		c.freeObject(object)
 	}
 
-	cache.RangeExpiredTexturesFor(c.impl, c.painter.Free)
+	// RGOClient patch: the sweep ranges every cached texture, and expiry has
+	// minute granularity, so running it on every painted frame only burns the
+	// frame budget. Once a second finds exactly the same entries.
+	if now := time.Now(); now.Sub(c.lastTextureSweep) >= time.Second {
+		c.lastTextureSweep = now
+		cache.RangeExpiredTexturesFor(c.impl, c.painter.Free)
+	}
 	return objectsToFree
 }
 
