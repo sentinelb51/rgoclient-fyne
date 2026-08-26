@@ -2,13 +2,12 @@ package fyne
 
 import "sync/atomic"
 
-// Frame pacing. An RGOClient patch, not upstream API.
+// Toolkit knobs. RGOClient patches, not upstream API.
 //
-// Upstream polls the OS event queue on a ticker hard-coded at 60 Hz
-// (internal/driver/glfw/loop.go) and calls glfw.SwapInterval only under Wayland
-// (internal/driver/glfw/window_desktop.go). Both files are under internal/, so
-// neither is reachable from an importing module; these two knobs are the seam
-// the patch adds. See PATCHES.md.
+// Each is a decision upstream takes somewhere an importing module cannot reach:
+// the driver loop's hard-coded 60 Hz ticker and its Wayland-only
+// glfw.SwapInterval, both under internal/, and widget.Entry's caret animation,
+// which is unexported. These are the seam the patches add. See PATCHES.md.
 
 // DefaultFrameRate is what the driver runs at until told otherwise, and what
 // upstream hard-codes.
@@ -25,12 +24,14 @@ var (
 	frameRate      atomic.Int64
 	vsync          atomic.Bool
 	partialRepaint atomic.Bool
+	cursorBlink    atomic.Bool
 )
 
 func init() {
 	frameRate.Store(DefaultFrameRate)
 	vsync.Store(true)
 	partialRepaint.Store(true)
+	cursorBlink.Store(true)
 }
 
 // SetFrameRate sets how many times a second the desktop driver ticks animations
@@ -75,4 +76,20 @@ func SetPartialRepaint(enabled bool) {
 // PartialRepaint reports what SetPartialRepaint last set.
 func PartialRepaint() bool {
 	return partialRepaint.Load()
+}
+
+/* The entry caret */
+
+// SetCursorBlink decides whether a focused entry's caret fades in and out or
+// stands still. Upstream blinks whenever animations are on and offers no way to
+// separate the two; off, the caret is painted once in the application theme's
+// Primary and left alone. Safe from any goroutine; an entry already focused
+// takes it on its next refresh.
+func SetCursorBlink(enabled bool) {
+	cursorBlink.Store(enabled)
+}
+
+// CursorBlink reports what SetCursorBlink last set.
+func CursorBlink() bool {
+	return cursorBlink.Load()
 }

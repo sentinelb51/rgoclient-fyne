@@ -86,8 +86,25 @@ func (a *entryCursorAnimation) createAnim() *fyne.Animation {
 	return anim
 }
 
-// starts cursor animation.
+// starts cursor animation, or paints a caret that stands still where blinking
+// is turned off.
+//
+// RGOClient patch: the static caret is painted here rather than left to the
+// renderer's no-animations branch, because that one colours it from the
+// widget-scoped theme. Scoping Primary away is how a caret is coloured apart
+// from the focus ring it shares the name with, so the colour has to come from
+// the application theme, as the animation's own does.
 func (a *entryCursorAnimation) start() {
+	if !fyne.CursorBlink() {
+		a.stop()
+
+		if fill := theme.Color(theme.ColorNamePrimary); a.cursor.FillColor != fill {
+			a.cursor.FillColor = fill
+			a.cursor.Refresh()
+		}
+		return
+	}
+
 	if a.anim == nil {
 		a.anim = a.createAnim()
 		a.anim.Start()

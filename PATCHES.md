@@ -1,11 +1,11 @@
 # The patches
 
-Ten. All but two are under Fyne's `internal/`, which is the whole reason
-this fork exists, since none of it is reachable from an importing module. The
-sixth and seventh are in exported code — `widget` and `canvas` — where the work
-being skipped is inside a method an importing module can call but not replace.
-Nothing else in the tree is edited: `git diff upstream main` is exactly this
-list.
+Eleven. Most are under Fyne's `internal/`, which is the whole reason this fork
+exists, since none of it is reachable from an importing module. The sixth,
+seventh and eleventh are in exported code — `widget` and `canvas` — where the
+work being skipped, or the decision being taken, sits inside a method an
+importing module can call but not replace. Nothing else in the tree is edited:
+`git diff upstream main` is exactly this list.
 
 Every patch is marked `RGOClient patch` in the source, so
 `git grep -n "RGOClient patch"` finds all of them, and each is one commit on
@@ -268,6 +268,26 @@ Three separate costs, all paid per frame, none of which changes what is drawn:
   `FreeDirtyTextures` ranged every cached texture every painted frame looking
   for expired ones; expiry has minute granularity, so the sweep now runs at
   most once a second per canvas.
+
+## 11. A caret that can stand still
+
+`pacing.go` — `SetCursorBlink` / `CursorBlink`, on by default, which is what
+upstream does.
+
+`widget/entry_cursor_anim.go` — `start()` paints the caret once and returns
+rather than running the animation.
+
+Upstream ties the blink to `Settings().ShowAnimations()`: global, no exported
+setter, and turning it off takes every other animation with it. Its
+no-animations branch in `widget/entry.go` is also no use, because it colours the
+caret from the *widget-scoped* theme where the animation reads the *application*
+one — the difference RGOClient's `ui.WithCaret` is built on, a scoped theme being
+the only way to colour a caret without colouring the focus ring it shares
+`ColorNamePrimary` with. So the static caret is painted in `start()` from the
+application theme instead of by letting that branch run.
+
+An entry already focused when the knob moves keeps what it has until its next
+refresh; there is no registry of live carets to walk.
 
 ## Carrying them forward
 
