@@ -392,6 +392,7 @@ func (p *painter) drawArbitraryPolygon(polygon *canvas.ArbitraryPolygon, pos fyn
 }
 
 func (p *painter) drawObject(o fyne.CanvasObject, pos fyne.Position, frame fyne.Size, clip *internal.ClipItem) {
+	drawCount++
 	switch obj := o.(type) {
 	case *canvas.Blur:
 		p.drawBlur(obj, pos, frame)

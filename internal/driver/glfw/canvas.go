@@ -3,6 +3,7 @@ package glfw
 import (
 	"image"
 	"math"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -258,8 +259,18 @@ func (c *glCanvas) paint(size fyne.Size) {
 	if full {
 		c.ResetDamage() // tracking re-enabled must not diff against stale rects
 	} else {
+		var dt time.Time
+		if frameTiming {
+			dt = time.Now()
+		}
 		c.ComputeDamage(size, &c.damage)
+		if frameTiming {
+			ftFrameDamage = time.Since(dt)
+		}
 		full = c.damage.Full()
+	}
+	if frameTiming {
+		ftFrameFull = full
 	}
 	if !full && !c.Painter().RestorePreviousFrame() {
 		full = true

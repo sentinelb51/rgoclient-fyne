@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/internal/cache"
 	"fyne.io/fyne/v2/internal/driver/common"
 	"fyne.io/fyne/v2/internal/painter"
+	"fyne.io/fyne/v2/internal/painter/gl"
 	"fyne.io/fyne/v2/internal/scale"
 )
 
@@ -350,13 +351,26 @@ func (d *gLDriver) destroyWindow(w *window, index int) {
 func (d *gLDriver) repaintWindow(w *window) bool {
 	canvas := w.canvas
 	freed := false
+
+	var t0, t1, t2 time.Time
+	if frameTiming {
+		t0 = time.Now()
+	}
+
 	if canvas.EnsureMinSize() {
 		w.shouldExpand = true
 	}
 	freed = canvas.FreeDirtyTextures() > 0
 
 	updateGLContext(w)
+
+	if frameTiming {
+		t1 = time.Now()
+	}
 	canvas.paint(canvas.Size())
+	if frameTiming {
+		t2 = time.Now()
+	}
 
 	view := w.viewport
 	visible := w.visible
@@ -365,6 +379,10 @@ func (d *gLDriver) repaintWindow(w *window) bool {
 		w.applySwapInterval() // RGOClient patch: the GL context is current here and nowhere else
 		w.frame.requestFrame()
 		view.SwapBuffers()
+	}
+
+	if frameTiming {
+		recordFrame(t1.Sub(t0), t2.Sub(t1), time.Since(t2), gl.TakeDrawCount())
 	}
 
 	// mark that we have walked the window and don't
