@@ -31,6 +31,10 @@ var (
 	// wait on the channel rather than on the OS queue, which nothing else will
 	// wake for it.
 	pendingFuncs atomic.Int64
+
+	// RGOClient patch: whether a wake is already on its way to the loop. See
+	// wakeLoop — one post serves every func queued before the loop reaches it.
+	wakePosted atomic.Bool
 )
 
 // Arrange that main.main runs on main thread.
@@ -217,6 +221,24 @@ func (d *gLDriver) runGL() {
 		}
 
 		if wait > 0 {
+			// RGOClient patch: the claim wakeLoop takes is released here, at the one
+			// point the loop parks, and nowhere earlier. A post is consumed by
+			// pollEvents in the same pass that drains the func it carried, so a claim
+			// released at the top of the loop leaves the rest of the pass — the drain,
+			// the frame — as a window where a producer finds the claim still standing,
+			// skips its post, and is then waited straight through: measured at 3% of
+			// enqueues stalled for the whole idleWait.
+			//
+			// Released, then pendingFuncs is re-read, which is the park half of a
+			// check-then-park: a producer that skipped its post has already counted
+			// itself there, and one that has not counted itself yet finds the claim
+			// free and posts. sync/atomic is sequentially consistent, so the store and
+			// the load cannot both miss.
+			wakePosted.Store(false)
+			if pendingFuncs.Load() > 0 {
+				continue
+			}
+
 			// Never shorter than the OS wait can express: it rounds down, so a wait
 			// under waitResolution returns at once and spins the loop until the
 			// deadline passes. A frame rate that high is bounded by the frame itself.
@@ -326,8 +348,19 @@ const waitResolution = time.Millisecond
 // wakeLoop ends the wait the loop is in, so work queued for the main thread runs
 // now rather than when the wait times out. Before Run it does nothing: there is
 // no loop to wake and GLFW may not be initialised.
+//
+// RGOClient patch: one post per wake, not one per func. postEmptyEvent is a cgo
+// call into a Win32 PostMessage (an X11 write, a Wayland one), and it ends the
+// wait — so a burst of queued work used to cost a syscall and a whole loop pass,
+// pollEvents and damage check included, for every item in it.
+//
+// The claim taken here is released by runGL immediately before it parks, and
+// that placement is load-bearing: released any earlier and a producer can find
+// the claim standing, skip its post, and be waited through to idleWait. See the
+// comment there. Quit posts directly rather than through here — shutdown must
+// never be the wake that gets coalesced away.
 func wakeLoop() {
-	if running.Load() {
+	if running.Load() && wakePosted.CompareAndSwap(false, true) {
 		postEmptyEvent()
 	}
 }

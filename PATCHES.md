@@ -1,6 +1,6 @@
 # The patches
 
-Eleven. Most are under Fyne's `internal/`, which is the whole reason this fork
+Twelve. Most are under Fyne's `internal/`, which is the whole reason this fork
 exists, since none of it is reachable from an importing module. The sixth,
 seventh and eleventh are in exported code — `widget` and `canvas` — where the
 work being skipped, or the decision being taken, sits inside a method an
@@ -288,6 +288,46 @@ application theme instead of by letting that branch run.
 
 An entry already focused when the knob moves keeps what it has until its next
 refresh; there is no registry of live carets to walk.
+
+## 12. One wake per drain, not one per queued func
+
+`internal/driver/glfw/loop.go` — `wakePosted`, a claim `wakeLoop` takes with a
+compare-and-swap and `runGL` releases at the one point it parks.
+
+Patch 5 made every `DoFromGoroutine` post an empty event, because a loop blocked
+in the OS event queue is not woken by a channel send. That post is a cgo call
+into a Win32 `PostMessage` and it ends the wait, so *n* funcs queued before the
+loop got to any of them cost *n* syscalls and *n* whole loop passes —
+`pollEvents`, the mouse fixups, the damage check — to run work one pass would
+have drained. `pendingFuncs` already makes the drain wait for a func that has
+been counted, so the second post buys nothing.
+
+Measured on a 200,000-func flood against an idle loop, Ryzen 9 9950X3D:
+**1.39 s wall / 1.79 s CPU → 99 ms / 190 ms**, 8.9 µs → 0.94 µs of CPU per
+queued func. On a gateway's shape — 3,000 bursts of 32 with a 1 ms gap — CPU
+**1.31 s → 0.20 s**, 13.7 µs → 2.1 µs each.
+
+**Where the claim is released is the whole patch, and it is not obvious.**
+`pollEvents` consumes the post in the *same pass* that drains the func it was
+posted for, so a claim released at the top of the loop leaves the rest of that
+pass — the drain and the frame — as a window in which a producer finds the claim
+still standing, skips its post, and is then waited straight through to
+`idleWait`. That version measured **3% of enqueues stalled for 100 ms**, and is
+what the comment in the source warns against. Released instead immediately
+before `waitEvents` and followed by a re-read of `pendingFuncs`: a producer that
+skipped its post has already counted itself there, and one that has not counted
+itself yet finds the claim free and posts. `sync/atomic` is sequentially
+consistent, so the store and the load cannot both miss — the park half of a
+check-then-park.
+
+`Quit` posts directly rather than through `wakeLoop`, so shutdown is never the
+wake that gets coalesced away.
+
+To re-prove it after a rebase: queue one func at a time against an idle loop and
+time it. Correct is tens of microseconds; a lost wake is ~100 ms (`idleWait`), so
+the failure is loud when it is looked for and silent otherwise. Do it with
+several producer goroutines and with both arms of `runOnMainWithWait` — the
+single-producer case passes even with the claim released in the wrong place.
 
 ## Carrying them forward
 
