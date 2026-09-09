@@ -1,11 +1,11 @@
 # The patches
 
-Thirteen. Most are under Fyne's `internal/`, which is the whole reason this fork
+Fourteen. Most are under Fyne's `internal/`, which is the whole reason this fork
 exists, since none of it is reachable from an importing module. The sixth,
-seventh and eleventh are in exported code — `widget` and `canvas` — where the
-work being skipped, or the decision being taken, sits inside a method an
-importing module can call but not replace. Nothing else in the tree is edited:
-`git diff upstream main` is exactly this list.
+seventh, eleventh and fourteenth are in exported code — `widget` and
+`canvas` — where the work being skipped, or the decision being taken, sits
+inside a method an importing module can call but not replace. Nothing else in
+the tree is edited: `git diff upstream main` is exactly this list.
 
 Every patch is marked `RGOClient patch` in the source, so
 `git grep -n "RGOClient patch"` finds all of them, and each is one commit on
@@ -356,6 +356,59 @@ The one thing to keep on a rebase: `timeMock.setTime` in `base_test.go`
 publishes to `aliveNow` as well as swapping `timeNow`, because it is standing in
 for the paint loop that would have. Without that, every expiry test silently
 measures the process start instead.
+
+## 14. The wrap search slices bytes instead of minting strings
+
+`widget/richtext.go` — `textMeasurer`, and the six unexported functions that
+wrap a segment (`lineBounds`, `wrapBreakLines`, `wrapWordLines`,
+`truncateLines`, `ellipsisPriorBound`, `howManyRunesFit`) re-indexed onto it.
+
+The measurer was `func([]rune) fyne.Size` and every caller reached it the same
+way: slice the segment's runes, `string(...)` the slice, measure that. Wrapping
+one line is a binary search — `howManyRunesFit` probes a prefix per step — so
+each probe minted a string: an allocation and a UTF-8 re-encode of up to the
+whole line, for a value read once and dropped. `RenderedTextSize` then keyed
+`fontSizeCache` on that string, so every probe also left an entry holding its
+own private copy of the bytes alive for `ValidDuration`.
+
+It is now `m.size(begin, end)` over rune indices into the segment's own text.
+`textMeasurer` holds the text, one rune view (which is what row boundaries are
+indexed in, and what `Entry` and `Selectable` read back out of them, so the
+boundaries themselves are unchanged), and a rune-to-byte offset table built only
+when the text is not all ASCII — `len(runes) == len(text)` is the test. A probe
+is then a substring of bytes that already exist. The metric cache keys share the
+segment's backing array rather than each retaining a copy.
+
+The rune conversions collapse with it. `lineBounds` built one in `splitLines`,
+another in whichever wrap function ran, another in `ellipsisPriorBound`, and
+`truncateLines` built a fresh one *per line* in its ellipsis branch. There is
+now one, built with the measurer and lent to all of them. The measurer is
+returned by value and only lent, so escape analysis keeps it off the heap.
+
+`ellipsisPriorBound` measures its "…" through the measurer rather than
+re-deriving the size and style from `prior.segments[0].(*TextSegment)`. Same
+result for a text segment — the closure was built from the same two fields —
+and it drops an unchecked type assertion that would have panicked on an
+ellipsis-truncated `HyperlinkSegment`.
+
+Measured on this fork's own benchmarks, warm metrics cache, which is what a
+running app has (4-core Xeon, `-benchtime=300x`, median of five):
+
+| | before | after |
+| --- | --- | --- |
+| `lineBounds_WrapWord_cached` | 2.25 ms, 916 KB, 13,200 allocs | 1.96 ms, 840 KB, **3,300 allocs** |
+| `lineBounds_WrapBreak_cached` | 2.29 ms, 919 KB, 13,710 allocs | 2.17 ms, 841 KB, **3,402 allocs** |
+| `lineBounds_WrapWord_cached_chinese` | 431 µs, 152 KB, 2,447 allocs | 392 µs, 141 KB, **623 allocs** |
+
+The cold-cache benchmarks (`_WrapWord`, `_WrapBreak`, which clear the cache each
+iteration) move much less, because there the shaper dominates: 48,899 → 39,000
+allocs on word wrap with the time inside the noise. That is the honest split —
+this patch buys allocations, and it buys time only where the measurement itself
+is already cheap.
+
+The `_cached` benchmarks and the Chinese one are new, and they are the ones to
+re-run after a rebase: the non-ASCII case is the only cover for the offset
+table, and a cold-cache benchmark cannot see this patch at all.
 
 ## Carrying them forward
 
