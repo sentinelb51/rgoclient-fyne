@@ -244,6 +244,10 @@ func (t *timeMock) setTime(min, sec int) {
 	timeNow = func() time.Time {
 		return t.now
 	}
+
+	// setAlive reads the clock Clean publishes rather than the wall clock, so
+	// the mock stands in for the paint loop that would have published it.
+	aliveNow.Store(t.now.UnixNano())
 }
 
 func testClearAll() {
@@ -255,4 +259,5 @@ func testClearAll() {
 	renderers.Clear()
 	blurKernels.Clear()
 	timeNow = time.Now
+	aliveNow.Store(time.Now().UnixNano())
 }

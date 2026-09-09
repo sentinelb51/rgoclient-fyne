@@ -1,6 +1,6 @@
 # The patches
 
-Twelve. Most are under Fyne's `internal/`, which is the whole reason this fork
+Thirteen. Most are under Fyne's `internal/`, which is the whole reason this fork
 exists, since none of it is reachable from an importing module. The sixth,
 seventh and eleventh are in exported code — `widget` and `canvas` — where the
 work being skipped, or the decision being taken, sits inside a method an
@@ -328,6 +328,34 @@ time it. Correct is tens of microseconds; a lost wake is ~100 ms (`idleWait`), s
 the failure is loud when it is looked for and silent otherwise. Do it with
 several producer goroutines and with both arms of `runOnMainWithWait` — the
 single-producer case passes even with the claim released in the wrong place.
+
+## 13. The cache's clock is read once a frame, not once a lookup
+
+`internal/cache/base.go` — `aliveNow`, an `atomic.Int64` of Unix nanoseconds
+that `Clean` publishes, and `expiringCache.expires` narrowed from a `time.Time`
+to the same.
+
+`setAlive` stamped an entry with `time.Now()`, and it runs on every *lookup*:
+`Renderer`, `CachedRenderer`, `GetCanvasForObject`, `GetTexture`,
+`GetFontMetrics`, `GetSvg`. On RGOClient's tree that is thousands of calls per
+frame, each one a vDSO read on Linux and a `QueryPerformanceCounter` on Windows.
+
+Every lifetime in this package is `ValidDuration` — a minute unless `FYNE_CACHE`
+says otherwise — and `Clean` already reads the clock once per paint event, at
+the top, before it decides whether to do any work. So the stamp is that reading:
+an entry set alive between two paints carries the earlier one, which is at most
+one frame stale against a minute. Expiry is unchanged — `isExpired` still takes
+the `now` its caller measured, and every caller is `Clean` itself.
+
+Measured with RGOClient's `internal/app` virtual benchmarks (4-core Xeon,
+software driver): `time.Now` was 3.2% of the client's CPU samples before and
+absent after; a wheel tick over 250 mounted rows **~437 → ~355 µs**, a channel
+open **~1.40 → ~1.20 ms**.
+
+The one thing to keep on a rebase: `timeMock.setTime` in `base_test.go`
+publishes to `aliveNow` as well as swapping `timeNow`, because it is standing in
+for the paint loop that would have. Without that, every expiry test silently
+measures the process start instead.
 
 ## Carrying them forward
 
