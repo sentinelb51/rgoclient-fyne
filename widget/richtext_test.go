@@ -514,7 +514,7 @@ func TestText_splitLines(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := splitLines(&TextSegment{Text: tt.text})
+			got := splitLines(&TextSegment{Text: tt.text}, []rune(tt.text))
 			for i, wantRow := range tt.want {
 				assert.Equal(t, wantRow[0], got[i].begin)
 				assert.Equal(t, wantRow[1], got[i].end)
@@ -524,8 +524,8 @@ func TestText_splitLines(t *testing.T) {
 }
 
 func TestText_lineBounds(t *testing.T) {
-	measurer := func(text []rune) fyne.Size {
-		return fyne.MeasureText(string(text), 14, fyne.TextStyle{})
+	measurer := func(text string) fyne.Size {
+		return fyne.MeasureText(text, 14, fyne.TextStyle{})
 	}
 	tests := []struct {
 		name     string
@@ -1086,8 +1086,8 @@ func TestText_lineBounds(t *testing.T) {
 }
 
 func TestText_lineBounds_hyperlinks(t *testing.T) {
-	measurer := func(text []rune) fyne.Size {
-		return fyne.MeasureText(string(text), 14, fyne.TextStyle{})
+	measurer := func(text string) fyne.Size {
+		return fyne.MeasureText(text, 14, fyne.TextStyle{})
 	}
 	tests := []struct {
 		name     string
@@ -1226,8 +1226,8 @@ func TestText_lineBounds_variable_char_width(t *testing.T) {
 	}
 	textSize := float32(10)
 	textStyle := fyne.TextStyle{}
-	measurer := func(text []rune) fyne.Size {
-		return fyne.MeasureText(string(text), textSize, textStyle)
+	measurer := func(text string) fyne.Size {
+		return fyne.MeasureText(text, textSize, textStyle)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1244,8 +1244,8 @@ func TestText_lineBounds_variable_char_width(t *testing.T) {
 }
 
 func TestText_lineBounds_small_firstWidth(t *testing.T) {
-	measurer := func(text []rune) fyne.Size {
-		return fyne.MeasureText(string(text), 14, fyne.TextStyle{})
+	measurer := func(text string) fyne.Size {
+		return fyne.MeasureText(text, 14, fyne.TextStyle{})
 	}
 	richText := NewRichTextWithText("foobar")
 	richText.Wrapping = fyne.TextWrapWord
@@ -1261,10 +1261,10 @@ func TestText_howManyRunesFit(t *testing.T) {
 	maxWidth := float32(46)
 	textSize := float32(10)
 	textStyle := fyne.TextStyle{}
-	measurer := func(text []rune) fyne.Size {
-		return fyne.MeasureText(string(text), textSize, textStyle)
+	measurer := func(text string) fyne.Size {
+		return fyne.MeasureText(text, textSize, textStyle)
 	}
-	charWidth := measurer([]rune("z")).Width
+	charWidth := measurer("z").Width
 	for name, tt := range map[string]struct {
 		text string
 		want int
@@ -1303,15 +1303,21 @@ func TestText_howManyRunesFit(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tt.want, howManyRunesFit([]rune(tt.text), maxWidth, charWidth, measurer))
+			m := newTextMeasurer(tt.text, measurer)
+			assert.Equal(t, tt.want, howManyRunesFit(&m, 0, len(m.runes), maxWidth, charWidth))
 		})
 	}
 	t.Run("Zero width", func(t *testing.T) {
-		assert.Equal(t, 0, howManyRunesFit([]rune("foo"), 0, charWidth, measurer))
+		assert.Equal(t, 0, howManyRunesFitText("foo", measurer, 0, charWidth))
 	})
 	t.Run("Negative width", func(t *testing.T) {
-		assert.Equal(t, 0, howManyRunesFit([]rune("foo"), -1, charWidth, measurer))
+		assert.Equal(t, 0, howManyRunesFitText("foo", measurer, -1, charWidth))
 	})
+}
+
+func howManyRunesFitText(text string, measure func(string) fyne.Size, availableWidth, charWidth float32) int {
+	m := newTextMeasurer(text, measure)
+	return howManyRunesFit(&m, 0, len(m.runes), availableWidth, charWidth)
 }
 
 func TestText_findSpaceIndex(t *testing.T) {

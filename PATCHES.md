@@ -1,11 +1,11 @@
 # The patches
 
-Thirteen. Most are under Fyne's `internal/`, which is the whole reason this fork
+Fifteen. Most are under Fyne's `internal/`, which is the whole reason this fork
 exists, since none of it is reachable from an importing module. The sixth,
-seventh and eleventh are in exported code — `widget` and `canvas` — where the
-work being skipped, or the decision being taken, sits inside a method an
-importing module can call but not replace. Nothing else in the tree is edited:
-`git diff upstream main` is exactly this list.
+seventh, eleventh, fourteenth and fifteenth are in exported code — `widget` and
+`canvas` — where the work being skipped, or the decision being taken, sits
+inside a method an importing module can call but not replace. Nothing else in
+the tree is edited: `git diff upstream main` is exactly this list.
 
 Every patch is marked `RGOClient patch` in the source, so
 `git grep -n "RGOClient patch"` finds all of them, and each is one commit on
@@ -357,7 +357,121 @@ publishes to `aliveNow` as well as swapping `timeNow`, because it is standing in
 for the paint loop that would have. Without that, every expiry test silently
 measures the process start instead.
 
+## 14. The wrap search slices bytes instead of minting strings
+
+`widget/richtext.go` — `textMeasurer`, and the six unexported functions that
+wrap a segment (`lineBounds`, `wrapBreakLines`, `wrapWordLines`,
+`truncateLines`, `ellipsisPriorBound`, `howManyRunesFit`) re-indexed onto it.
+
+The measurer was `func([]rune) fyne.Size` and every caller reached it the same
+way: slice the segment's runes, `string(...)` the slice, measure that. Wrapping
+one line is a binary search — `howManyRunesFit` probes a prefix per step — so
+each probe minted a string: an allocation and a UTF-8 re-encode of up to the
+whole line, for a value read once and dropped. `RenderedTextSize` then keyed
+`fontSizeCache` on that string, so every probe also left an entry holding its
+own private copy of the bytes alive for `ValidDuration`.
+
+It is now `m.size(begin, end)` over rune indices into the segment's own text.
+`textMeasurer` holds the text, one rune view (which is what row boundaries are
+indexed in, and what `Entry` and `Selectable` read back out of them, so the
+boundaries themselves are unchanged), and a rune-to-byte offset table built only
+when the text is not all ASCII — `len(runes) == len(text)` is the test. A probe
+is then a substring of bytes that already exist. The metric cache keys share the
+segment's backing array rather than each retaining a copy.
+
+The rune conversions collapse with it. `lineBounds` built one in `splitLines`,
+another in whichever wrap function ran, another in `ellipsisPriorBound`, and
+`truncateLines` built a fresh one *per line* in its ellipsis branch. There is
+now one, built with the measurer and lent to all of them. The measurer is
+returned by value and only lent, so escape analysis keeps it off the heap.
+
+`ellipsisPriorBound` measures its "…" through the measurer rather than
+re-deriving the size and style from `prior.segments[0].(*TextSegment)`. Same
+result for a text segment — the closure was built from the same two fields —
+and it drops an unchecked type assertion that would have panicked on an
+ellipsis-truncated `HyperlinkSegment`.
+
+Measured on this fork's own benchmarks, warm metrics cache, which is what a
+running app has (4-core Xeon, `-benchtime=300x`, median of five):
+
+| | before | after |
+| --- | --- | --- |
+| `lineBounds_WrapWord_cached` | 2.25 ms, 916 KB, 13,200 allocs | 1.96 ms, 840 KB, **3,300 allocs** |
+| `lineBounds_WrapBreak_cached` | 2.29 ms, 919 KB, 13,710 allocs | 2.17 ms, 841 KB, **3,402 allocs** |
+| `lineBounds_WrapWord_cached_chinese` | 431 µs, 152 KB, 2,447 allocs | 392 µs, 141 KB, **623 allocs** |
+
+The cold-cache benchmarks (`_WrapWord`, `_WrapBreak`, which clear the cache each
+iteration) move much less, because there the shaper dominates: 48,899 → 39,000
+allocs on word wrap with the time inside the noise. That is the honest split —
+this patch buys allocations, and it buys time only where the measurement itself
+is already cheap.
+
+The `_cached` benchmarks and the Chinese one are new, and they are the ones to
+re-run after a rebase: the non-ASCII case is the only cover for the offset
+table, and a cold-cache benchmark cannot see this patch at all.
+
+## 15. A widget keeps its renderer rather than looking it up
+
+`internal/cache/widget.go` — `RendererEntry` (was the unexported `rendererInfo`)
+gains an atomic `live` flag and a `Renderer()` accessor; `RendererWithEntry`
+returns the entry alongside the renderer. `internal/cache/base.go` — both sweeps
+retire an entry through `destroy()` rather than calling `renderer.Destroy()`
+directly.
+
+`widget/widget.go`, `internal/widget/base.go` — `BaseWidget` and `Base` hold the
+entry they were last handed, and `Resize`, `Refresh` and `MinSize` go through a
+`renderer()` helper that reads it back.
+
+`BaseWidget.MinSize` was `cache.Renderer(impl)`, which hashes an interface value
+and loads from a `sync.Map`. The driver asks every visible object for its
+minimum on every dirty frame, so that is one interface hash per widget per
+frame, on a tree of hundreds.
+
+The map stays the registry — nothing about creation, expiry or destruction
+moves, and a widget that has never been mounted still takes the slow path. What
+the entry adds is a way to ask "is this still the renderer the map holds?"
+without consulting the map: `destroy()` clears `live`, and every path that
+removes an entry (`DestroyRenderer`, `destroyExpiredRenderers`, `CleanCanvas`)
+goes through it. A dead entry falls back to the lookup, which is exactly the old
+behaviour. The fast path still calls `setAlive`, so a widget measured every
+frame cannot expire out from under itself — that is the same stamp the map
+lookup would have made, and since patch 13 it is an atomic load and a store
+rather than a clock read.
+
+It costs a pointer on every widget and a padded bool on every cache entry, about
+16 bytes per mounted widget. That is visible as a small rise in `B/op` on the
+client benchmarks below and it is live memory, not garbage.
+
+`BenchmarkBaseWidget_MinSize` (new, `widget/widget_benchmark_test.go`) asks 250
+mounted widgets with trivial renderers for their minimum, so what it measures is
+the lookup: **8.65 µs → 1.51 µs** per pass, 34.6 → 6.0 ns per widget.
+
+## Measured on the client
+
+Patches 14 and 15 together, against RGOClient's `internal/app` virtual
+benchmarks (4-core Xeon @ 2.1GHz, software driver, median of five, `count=5`).
+The machine is noisy; the shape is what matters, not the last digit.
+
+| | before | after |
+| --- | --- | --- |
+| `FrameWalk/mounted=50` | 229 µs | **172 µs** |
+| `FrameWalk/mounted=250` | 328 µs | **291 µs** |
+| `OpenChannel` | 906 µs | **826 µs** |
+| `AppendLive` | 305 µs | **228 µs** |
+| `WheelTick/mounted=250` | 226 µs | **223 µs** |
+
+`FrameWalk` is the min-size walk and nothing else, so it is patch 15 on its own.
+`AppendLive` mounts a row — a wrap and a walk — and is where the two compound.
+`WheelTick` is inside the noise: a scroll re-lays out rather than re-wrapping,
+and patch 6 already stopped it re-wrapping on height.
+
 ## Carrying them forward
+
+`GOEXPERIMENT=simd` was tried and does nothing here. It gates the `simd`
+package's intrinsics; it does not vectorise existing code, and nothing in this
+tree or the client calls it. Measured either way on Go 1.27 the client
+benchmarks land on top of each other — `FrameWalk/mounted=250` 268 µs against
+266 µs, `AppendLive` 210 µs against 210 µs, both inside this machine's spread.
 
 `./update-fyne.sh vX.Y.Z` — see [README.md](README.md). The patches are small
 and sit in code that rarely moves, but they are ours to carry. If upstream ever

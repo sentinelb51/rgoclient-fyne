@@ -32,21 +32,34 @@ Ut ac pulvinar purus. Pellentesque tellus quam, condimentum at odio id, viverra 
 
 func BenchmarkText_splitLines(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		splitLines(&TextSegment{Text: loremIpsum})
+		splitLines(&TextSegment{Text: loremIpsum}, []rune(loremIpsum))
 	}
 }
 
 func benchmarkTextLineBounds(wrap fyne.TextWrap, b *testing.B) {
+	benchmarkTextLineBoundsText(loremIpsum, wrap, true, b)
+}
+
+// benchmarkTextLineBoundsText wraps text repeatedly, either from a cold metrics
+// cache (which measures the shaper) or a warm one (which measures the wrapper).
+// A running app is the warm case: the same widths and the same probes recur.
+func benchmarkTextLineBoundsText(text string, wrap fyne.TextWrap, clearCache bool, b *testing.B) {
 	textSize := float32(10)
 	textStyle := fyne.TextStyle{}
-	measurer := func(text []rune) fyne.Size {
-		return fyne.MeasureText(string(text), textSize, textStyle)
+	measurer := func(text string) fyne.Size {
+		return fyne.MeasureText(text, textSize, textStyle)
 	}
-	richText := NewRichTextWithText(loremIpsum)
+	richText := NewRichTextWithText(text)
 	richText.Wrapping = wrap
 	richText.Truncation = fyne.TextTruncateOff
+	if !clearCache {
+		lineBounds(richText, richText.Segments[0], 10, fyne.NewSize(10, 14), measurer)
+		b.ResetTimer()
+	}
 	for n := 0; n < b.N; n++ {
-		cache.ClearFontMetrics()
+		if clearCache {
+			cache.ClearFontMetrics()
+		}
 		lineBounds(richText, richText.Segments[0], 10, fyne.NewSize(10, 14), measurer)
 	}
 }
@@ -67,38 +80,54 @@ func BenchmarkText_lineBounds_WrapWord(b *testing.B) {
 	benchmarkTextLineBounds(fyne.TextWrapWord, b)
 }
 
+func BenchmarkText_lineBounds_WrapWord_cached(b *testing.B) {
+	benchmarkTextLineBoundsText(loremIpsum, fyne.TextWrapWord, false, b)
+}
+
+func BenchmarkText_lineBounds_WrapBreak_cached(b *testing.B) {
+	benchmarkTextLineBoundsText(loremIpsum, fyne.TextWrapBreak, false, b)
+}
+
+func BenchmarkText_lineBounds_WrapWord_cached_chinese(b *testing.B) {
+	benchmarkTextLineBoundsText(strings.Repeat(chineseText, 4), fyne.TextWrapWord, false, b)
+}
+
 func BenchmarkText_howManyRunesFit_latin(b *testing.B) {
 	text := strings.Split(loremIpsum, "\n")[0]
 	maxWidth := float32(200)
 	textSize := float32(10)
 	textStyle := fyne.TextStyle{}
 	fontFace := painter.CachedFontFace(textStyle, nil, nil)
-	measurer := func(text []rune) fyne.Size {
-		size, _ := painter.MeasureString(fontFace.Fonts, string(text), textSize, textStyle)
+	measurer := func(text string) fyne.Size {
+		size, _ := painter.MeasureString(fontFace.Fonts, text, textSize, textStyle)
 		return size
 	}
-	charWidth := measurer([]rune("z")).Width
+	charWidth := measurer("z").Width
+	m := newTextMeasurer(text, measurer)
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		howManyRunesFit([]rune(text), maxWidth, charWidth, measurer)
+		howManyRunesFit(&m, 0, len(m.runes), maxWidth, charWidth)
 	}
 }
 
+const chineseText = "昔者文公出走而正天下，畢云：「正，讀如征。」王念孫云「畢讀非也，《爾雅》曰：『正，長也。』晉文為諸侯盟主，故曰『正天下』，與下『霸諸侯』對文。又《廣雅》『正，君也』。《尚賢》篇曰：『堯、舜、禹、湯、文、武之所以王天下正諸侯者』。凡墨子書言正天下正諸侯者，非訓為長，即訓為君，皆非征伐之謂。」案：王說是也。"
+
 func BenchmarkText_howManyRunesFit_chinese(b *testing.B) {
-	text := "昔者文公出走而正天下，畢云：「正，讀如征。」王念孫云「畢讀非也，《爾雅》曰：『正，長也。』晉文為諸侯盟主，故曰『正天下』，與下『霸諸侯』對文。又《廣雅》『正，君也』。《尚賢》篇曰：『堯、舜、禹、湯、文、武之所以王天下正諸侯者』。凡墨子書言正天下正諸侯者，非訓為長，即訓為君，皆非征伐之謂。」案：王說是也。"
+	text := chineseText
 	maxWidth := float32(200)
 	textSize := float32(10)
 	textStyle := fyne.TextStyle{}
 	fontFace := painter.CachedFontFace(textStyle, nil, nil)
 	// make sure the right font for chinese text is loaded
 	fontFace.Fonts.ResolveFace('昔')
-	measurer := func(text []rune) fyne.Size {
-		size, _ := painter.MeasureString(fontFace.Fonts, string(text), textSize, textStyle)
+	measurer := func(text string) fyne.Size {
+		size, _ := painter.MeasureString(fontFace.Fonts, text, textSize, textStyle)
 		return size
 	}
-	charWidth := measurer([]rune("z")).Width
+	charWidth := measurer("z").Width
+	m := newTextMeasurer(text, measurer)
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		howManyRunesFit([]rune(text), maxWidth, charWidth, measurer)
+		howManyRunesFit(&m, 0, len(m.runes), maxWidth, charWidth)
 	}
 }

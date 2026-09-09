@@ -19,6 +19,10 @@ type BaseWidget struct {
 
 	impl       fyne.Widget
 	themeCache fyne.Theme
+
+	// RGOClient patch: the renderer cache entry this widget last looked up --
+	// see PATCHES.md.
+	rendererCache *cache.RendererEntry
 }
 
 // ExtendBaseWidget is used by an extending widget to make use of BaseWidget functionality.
@@ -44,11 +48,10 @@ func (w *BaseWidget) Resize(size fyne.Size) {
 
 	w.size = size
 
-	impl := w.super()
-	if impl == nil {
+	if w.super() == nil {
 		return
 	}
-	cache.Renderer(impl).Layout(size)
+	w.renderer().Layout(size)
 }
 
 // Position gets the current position of this widget, relative to its parent.
@@ -69,14 +72,27 @@ func (w *BaseWidget) Move(pos fyne.Position) {
 
 // MinSize for the widget - it should never be resized below this value.
 func (w *BaseWidget) MinSize() fyne.Size {
-	impl := w.super()
-
-	r := cache.Renderer(impl)
+	r := w.renderer()
 	if r == nil {
 		return fyne.Size{}
 	}
 
 	return r.MinSize()
+}
+
+// renderer returns this widget's renderer, from the cache entry it was last
+// handed while that entry is still live and from the cache itself otherwise.
+//
+// RGOClient patch: MinSize is asked of every mounted widget on every dirty
+// frame, and the entry spares each of those a map lookup — see PATCHES.md.
+func (w *BaseWidget) renderer() fyne.WidgetRenderer {
+	if r := w.rendererCache.Renderer(); r != nil {
+		return r
+	}
+
+	r, entry := cache.RendererWithEntry(w.super())
+	w.rendererCache = entry
+	return r
 }
 
 // Visible returns whether or not this widget should be visible.
@@ -117,14 +133,13 @@ func (w *BaseWidget) Hide() {
 
 // Refresh causes this widget to be redrawn in its current state
 func (w *BaseWidget) Refresh() {
-	impl := w.super()
-	if impl == nil {
+	if w.super() == nil {
 		return
 	}
 
 	w.themeCache = nil
 
-	cache.Renderer(impl).Refresh()
+	w.renderer().Refresh()
 }
 
 // Theme returns a cached Theme instance for this widget (or its extending widget).

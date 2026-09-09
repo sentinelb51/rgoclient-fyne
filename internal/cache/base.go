@@ -89,7 +89,7 @@ func CleanCanvas(canvas fyne.Canvas) {
 		if !ok {
 			return true
 		}
-		rinfo.renderer.Destroy()
+		rinfo.destroy()
 		overrides.Delete(wid)
 		return true
 	})
@@ -114,9 +114,9 @@ func destroyExpiredCanvases(now time.Time) {
 // destroyExpiredRenderers deletes the renderer from the cache and calls
 // renderer.Destroy()
 func destroyExpiredRenderers(now time.Time) {
-	renderers.Range(func(wid fyne.Widget, rinfo *rendererInfo) bool {
+	renderers.Range(func(wid fyne.Widget, rinfo *RendererEntry) bool {
 		if rinfo.isExpired(now) {
-			rinfo.renderer.Destroy()
+			rinfo.destroy()
 			overrides.Delete(wid)
 			renderers.Delete(wid)
 		}

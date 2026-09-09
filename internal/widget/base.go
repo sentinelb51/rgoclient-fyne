@@ -12,6 +12,10 @@ type Base struct {
 	position fyne.Position
 	size     fyne.Size
 	impl     fyne.Widget
+
+	// RGOClient patch: the renderer cache entry this widget last looked up --
+	// see PATCHES.md.
+	rendererCache *cache.RendererEntry
 }
 
 // ExtendBaseWidget is used by an extending widget to make use of BaseWidget functionality.
@@ -38,11 +42,10 @@ func (w *Base) Resize(size fyne.Size) {
 
 	w.size = size
 
-	impl := w.super()
-	if impl == nil {
+	if w.super() == nil {
 		return
 	}
-	cache.Renderer(impl).Layout(size)
+	w.renderer().Layout(size)
 }
 
 // Position gets the current position of this widget, relative to its parent.
@@ -64,14 +67,26 @@ func (w *Base) Move(pos fyne.Position) {
 
 // MinSize for the widget - it should never be resized below this value.
 func (w *Base) MinSize() fyne.Size {
-	impl := w.super()
-
-	r := cache.Renderer(impl)
+	r := w.renderer()
 	if r == nil {
 		return fyne.NewSize(0, 0)
 	}
 
 	return r.MinSize()
+}
+
+// renderer returns this widget's renderer, from the cache entry it was last
+// handed while that entry is still live and from the cache itself otherwise.
+//
+// RGOClient patch: see PATCHES.md.
+func (w *Base) renderer() fyne.WidgetRenderer {
+	if r := w.rendererCache.Renderer(); r != nil {
+		return r
+	}
+
+	r, entry := cache.RendererWithEntry(w.super())
+	w.rendererCache = entry
+	return r
 }
 
 // Visible returns whether or not this widget should be visible.
@@ -112,12 +127,11 @@ func (w *Base) Hide() {
 
 // Refresh causes this widget to be redrawn in it's current state
 func (w *Base) Refresh() {
-	impl := w.super()
-	if impl == nil {
+	if w.super() == nil {
 		return
 	}
 
-	cache.Renderer(impl).Refresh()
+	w.renderer().Refresh()
 }
 
 // super will return the actual object that this represents.
