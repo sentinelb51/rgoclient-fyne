@@ -1,8 +1,8 @@
 # The patches
 
-Fourteen. Most are under Fyne's `internal/`, which is the whole reason this fork
+Fifteen. Most are under Fyne's `internal/`, which is the whole reason this fork
 exists, since none of it is reachable from an importing module. The sixth,
-seventh, eleventh and fourteenth are in exported code — `widget` and
+seventh, eleventh, fourteenth and fifteenth are in exported code — `widget` and
 `canvas` — where the work being skipped, or the decision being taken, sits
 inside a method an importing module can call but not replace. Nothing else in
 the tree is edited: `git diff upstream main` is exactly this list.
@@ -410,7 +410,68 @@ The `_cached` benchmarks and the Chinese one are new, and they are the ones to
 re-run after a rebase: the non-ASCII case is the only cover for the offset
 table, and a cold-cache benchmark cannot see this patch at all.
 
+## 15. A widget keeps its renderer rather than looking it up
+
+`internal/cache/widget.go` — `RendererEntry` (was the unexported `rendererInfo`)
+gains an atomic `live` flag and a `Renderer()` accessor; `RendererWithEntry`
+returns the entry alongside the renderer. `internal/cache/base.go` — both sweeps
+retire an entry through `destroy()` rather than calling `renderer.Destroy()`
+directly.
+
+`widget/widget.go`, `internal/widget/base.go` — `BaseWidget` and `Base` hold the
+entry they were last handed, and `Resize`, `Refresh` and `MinSize` go through a
+`renderer()` helper that reads it back.
+
+`BaseWidget.MinSize` was `cache.Renderer(impl)`, which hashes an interface value
+and loads from a `sync.Map`. The driver asks every visible object for its
+minimum on every dirty frame, so that is one interface hash per widget per
+frame, on a tree of hundreds.
+
+The map stays the registry — nothing about creation, expiry or destruction
+moves, and a widget that has never been mounted still takes the slow path. What
+the entry adds is a way to ask "is this still the renderer the map holds?"
+without consulting the map: `destroy()` clears `live`, and every path that
+removes an entry (`DestroyRenderer`, `destroyExpiredRenderers`, `CleanCanvas`)
+goes through it. A dead entry falls back to the lookup, which is exactly the old
+behaviour. The fast path still calls `setAlive`, so a widget measured every
+frame cannot expire out from under itself — that is the same stamp the map
+lookup would have made, and since patch 13 it is an atomic load and a store
+rather than a clock read.
+
+It costs a pointer on every widget and a padded bool on every cache entry, about
+16 bytes per mounted widget. That is visible as a small rise in `B/op` on the
+client benchmarks below and it is live memory, not garbage.
+
+`BenchmarkBaseWidget_MinSize` (new, `widget/widget_benchmark_test.go`) asks 250
+mounted widgets with trivial renderers for their minimum, so what it measures is
+the lookup: **8.65 µs → 1.51 µs** per pass, 34.6 → 6.0 ns per widget.
+
+## Measured on the client
+
+Patches 14 and 15 together, against RGOClient's `internal/app` virtual
+benchmarks (4-core Xeon @ 2.1GHz, software driver, median of five, `count=5`).
+The machine is noisy; the shape is what matters, not the last digit.
+
+| | before | after |
+| --- | --- | --- |
+| `FrameWalk/mounted=50` | 229 µs | **172 µs** |
+| `FrameWalk/mounted=250` | 328 µs | **291 µs** |
+| `OpenChannel` | 906 µs | **826 µs** |
+| `AppendLive` | 305 µs | **228 µs** |
+| `WheelTick/mounted=250` | 226 µs | **223 µs** |
+
+`FrameWalk` is the min-size walk and nothing else, so it is patch 15 on its own.
+`AppendLive` mounts a row — a wrap and a walk — and is where the two compound.
+`WheelTick` is inside the noise: a scroll re-lays out rather than re-wrapping,
+and patch 6 already stopped it re-wrapping on height.
+
 ## Carrying them forward
+
+`GOEXPERIMENT=simd` was tried and does nothing here. It gates the `simd`
+package's intrinsics; it does not vectorise existing code, and nothing in this
+tree or the client calls it. Measured either way on Go 1.27 the client
+benchmarks land on top of each other — `FrameWalk/mounted=250` 268 µs against
+266 µs, `AppendLive` 210 µs against 210 µs, both inside this machine's spread.
 
 `./update-fyne.sh vX.Y.Z` — see [README.md](README.md). The patches are small
 and sit in code that rarely moves, but they are ours to carry. If upstream ever

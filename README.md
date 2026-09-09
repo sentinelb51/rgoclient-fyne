@@ -1,6 +1,6 @@
 # rgoclient-fyne
 
-[Fyne](https://github.com/fyne-io/fyne) with fourteen patches for
+[Fyne](https://github.com/fyne-io/fyne) with fifteen patches for
 [rgoclient](https://github.com/sentinelb51/rgoclient). Not a general-purpose
 fork and not intended for anyone else's use — if one of these ever lands
 upstream, the patch here goes away rather than staying as a second answer.
@@ -8,7 +8,7 @@ upstream, the patch here goes away rather than staying as a second answer.
 Most are under Fyne's `internal/`, which is why the fork exists at all: none of
 it can be reached from an importing module. The rest are either new toolkit
 knobs in `pacing.go`, or work skipped inside an exported method —
-`widget.RichText`, `canvas.Image` — which an importing
+`widget.RichText`, `widget.BaseWidget`, `canvas.Image` — which an importing
 module can call but not replace. See [PATCHES.md](PATCHES.md) for what each one
 does and why.
 
